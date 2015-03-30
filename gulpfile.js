@@ -20,13 +20,36 @@
 'use strict';
 
 // Include Gulp & tools we'll use
-var gulp = require('gulp');
-var $ = require('gulp-load-plugins')();
-var del = require('del');
-var runSequence = require('run-sequence');
-var browserSync = require('browser-sync');
-var pagespeed = require('psi');
-var reload = browserSync.reload;
+try {
+  var gulp = require('gulp');
+  var $ = require('gulp-load-plugins')();
+  var del = require('del');
+  var runSequence = require('run-sequence');
+  var browserSync = require('browser-sync');
+  var pagespeed = require('psi');
+  var reload = browserSync.reload;
+  var source = require('vinyl-source-stream');
+  var browserify = require('browserify');
+  var watchify = require('watchify');
+} catch (e) {
+    // Unknown error, rethrow it.
+    if (e.code !== "MODULE_NOT_FOUND") {
+        throw e;
+    }
+
+    // Otherwise, we have a missing dependency. If the module is in the dependency list, the user just needs to run `npm install`.
+    // Otherwise, they need to install and save it.
+    var dependencies = require("./package.json").devDependencies;
+    var module = e.toString().match(/'(.*?)'/)[1];
+    var command = "npm install";
+
+    if (typeof dependencies[module] === "undefined") {
+        command += " --save-dev " + module;
+    }
+
+    console.error(e.toString() + ". Fix this by executing:\n\n" + command + "\n");
+    process.exit(1);
+}
 
 var AUTOPREFIXER_BROWSERS = [
   'ie >= 10',
@@ -39,6 +62,31 @@ var AUTOPREFIXER_BROWSERS = [
   'android >= 4.4',
   'bb >= 10'
 ];
+
+/**
+ * BROWSERIFY / WATCHIFY TASK ADDED HERE
+ */
+var dist = false; // set to true when `default` task is run
+gulp.task('watchify', function(){
+  var bundler = watchify(browserify('./app/scripts/app.js'), {
+    basedir: './app/scripts', // (roots __dirname)
+    debug: true
+  });
+  var bundle = function() {
+    return bundler
+      .bundle({ debug: true })
+      .on('error', $.notify.onError({
+        message: 'watchify error: <%= error.message %>'
+      }))
+      .pipe(source('bundle.js'))
+      // destination changes when `dist` is set to true
+      .pipe(gulp.dest( dist ? 'dist/scripts' : './app/build/' ))
+      .pipe(reload({stream: true, once: true}));
+  };
+  // rebundle on change
+  bundler.on('update', bundle);
+  return bundle();
+});
 
 // Lint JavaScript
 gulp.task('jshint', function () {
@@ -142,7 +190,7 @@ gulp.task('html', function () {
 gulp.task('clean', del.bind(null, ['.tmp', 'dist/*', '!dist/.git'], {dot: true}));
 
 // Watch files for changes & reload
-gulp.task('serve', ['styles'], function () {
+gulp.task('serve', ['watchify'], function () {
   browserSync({
     notify: false,
     // Customize the BrowserSync console logging prefix
@@ -151,7 +199,9 @@ gulp.task('serve', ['styles'], function () {
     // Note: this uses an unsigned certificate which on first access
     //       will present a certificate warning in the browser.
     // https: true,
-    server: ['.tmp', 'app']
+    server: {
+      baseDir: ['.tmp', 'app']
+    }
   });
 
   gulp.watch(['app/**/*.html'], reload);
@@ -169,13 +219,16 @@ gulp.task('serve:dist', ['default'], function () {
     // Note: this uses an unsigned certificate which on first access
     //       will present a certificate warning in the browser.
     // https: true,
-    server: 'dist'
+    server: {
+      baseDir: 'dist'
+    }
   });
 });
 
 // Build production files, the default task
 gulp.task('default', ['clean'], function (cb) {
-  runSequence('styles', ['jshint', 'html', 'images', 'fonts', 'copy'], cb);
+  dist = true; // changes Watchify's build destination
+  runSequence('styles', ['jshint', 'watchify', 'html', 'images', 'fonts', 'copy'], cb);
 });
 
 // Run PageSpeed Insights
